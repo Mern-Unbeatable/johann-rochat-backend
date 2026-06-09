@@ -58,7 +58,7 @@ export class Server {
 
     const allowedOrigins = [
       'http://localhost:5173',
-      'https://johann.maktechgroup.tech',
+      "https://casagen.ch"
     ];
 
     app.use(
