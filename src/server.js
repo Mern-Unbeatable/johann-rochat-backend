@@ -30,7 +30,7 @@ export class Server {
   configure() {
     if (this.isConfigured) return;
     this.securityMiddleware(this.app);
-    this.webhookRawBody(this.app);
+  
     this.standardMiddleware(this.app);
     this.routesMiddleware(this.app);
     this.apiMonitoring(this.app);
@@ -76,16 +76,6 @@ export class Server {
         methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
         allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
         optionsSuccessStatus: 200,
-      }),
-    );
-  }
-
-  webhookRawBody(app) {
-    app.use(
-      '/api/v1/payments/webhook',
-      express.raw({
-        type: 'application/json',
-        limit: '1mb',
       }),
     );
   }

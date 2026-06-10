@@ -49,6 +49,7 @@ class PaymentController {
     ResponseHandler.success(res, { message: 'Session verified', data: result });
   });
 
+  // ✅ THIS IS THE MAIN FUNCTION THAT REPLACES WEBHOOK
   verifyAndUnlock = catchAsync(async (req, res) => {
     const session_id = req.query.session_id || req.body?.session_id;
     const userId = req.user.id;
@@ -74,16 +75,7 @@ class PaymentController {
     });
   });
 
-  handleWebhook = async (req, res) => {
-    const signature = req.headers['stripe-signature'];
-    try {
-      const result = await paymentService.handleWebhook(req.body, signature);
-      return res.json(result);
-    } catch (err) {
-      this.log.error(`Webhook error: ${err.message}`);
-      return res.status(400).json({ error: 'Webhook failed verification' });
-    }
-  };
+  // ❌ WEBHOOK HANDLER REMOVED COMPLETELY
 
   manualProcess = catchAsync(async (req, res) => {
     const { sessionId, userId: targetUserId } = req.body;

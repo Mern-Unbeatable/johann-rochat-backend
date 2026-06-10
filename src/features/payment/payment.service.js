@@ -36,276 +36,143 @@ class PaymentService {
   }
 
   async createCheckoutSession({ userId, listingId, type, packageId, userNote }) {
-    const stripeCustomerId = await this._getOrCreateStripeCustomer(userId);
-
-    let lineItems = [];
-    let metadata = { userId, type };
-    let pendingImprovementRequestId = null;
-    let credits = 0;
-
-    if (type === 'LISTING_UNLOCK') {
-      const listing = await prisma.listing.findUnique({
-        where: { id: listingId },
-        select: { id: true, status: true, userId: true },
-      });
-      if (!listing) throw new Error('Listing not found');
-      if (listing.userId !== userId) throw new Error('Access denied');
-      if (listing.status !== 'DRAFT') {
-        throw new Error(`Listing status is "${listing.status}". Only DRAFT listings can be unlocked.`);
-      }
-      metadata.listingId = listingId;
-      lineItems = [{
-        price_data: {
-          currency: 'chf',
-          product_data: {
-            name: 'Débloquez votre annonce immobilière',
-            description: "Génération IA d'une annonce professionnelle en français",
-          },
-          unit_amount: PRICES.LISTING_UNLOCK,
-        },
-        quantity: 1,
-      }];
-
-    } else if (type === 'IMPROVEMENT_REQUEST') {
-      const listing = await prisma.listing.findUnique({
-        where: { id: listingId },
-        select: { id: true, status: true, userId: true },
-      });
-      if (!listing) throw new Error('Listing not found');
-      if (listing.userId !== userId) throw new Error('Access denied');
-
-      const improvementRequest = await prisma.improvementRequest.create({
-        data: { userId, listingId, status: 'PENDING', userNote: userNote ?? null },
-      });
-      pendingImprovementRequestId = improvementRequest.id;
-      metadata.listingId = listingId;
-      metadata.improvementRequestId = improvementRequest.id;
-      lineItems = [{
-        price_data: {
-          currency: 'chf',
-          product_data: {
-            name: 'Avis professionnel immobilier',
-            description: 'Votre annonce est analysée et améliorée par un expert',
-          },
-          unit_amount: PRICES.IMPROVEMENT_REQUEST,
-        },
-        quantity: 1,
-      }];
-
-    } else if (type === 'PACKAGE') {
-      if (!packageId) throw new Error('packageId is required for PACKAGE type');
-      const pkg = await prisma.package.findUnique({
-        where: { id: packageId, isActive: true },
-        select: { id: true, name: true, description: true, price: true, credits: true, pricePerCredit: true },
-      });
-      if (!pkg) throw new Error('Package not found or inactive');
-
-      credits = pkg.credits;
-      metadata.packageId = packageId;
-      lineItems = [{
-        price_data: {
-          currency: 'chf',
-          product_data: {
-            name: pkg.name,
-            description: `${pkg.credits} crédits IA — ${pkg.description}`,
-          },
-          unit_amount: Math.round(pkg.price * 100),
-        },
-        quantity: 1,
-      }];
-    }
-
-
-    const clientUrl = config.CLIENT_URL || config.CLIENT_URLS?.split(',')[0]?.trim();
-
-    const session = await stripe.checkout.sessions.create({
-      customer: stripeCustomerId,
-      payment_method_types: ['card'],
-      line_items: lineItems,
-      mode: 'payment',
-      success_url: `${clientUrl}/creer-annonce/ready?session_id={CHECKOUT_SESSION_ID}&success=true&type=${type}`,
-      cancel_url: `${clientUrl}/creer-annonce/ready?canceled=true`,
-      metadata,
-    });
-
-    await prisma.payment.create({
-      data: {
-        userId,
-        amount: lineItems[0].price_data.unit_amount / 100,
-        credits,
-        type,
-        status: 'PENDING',
-        stripeSessionId: session.id,
-        stripePaymentIntentId: '',
-        stripeCustomerId,
-        packageId: packageId ?? null,
-        ...(pendingImprovementRequestId && {
-          improvementRequest: { connect: { id: pendingImprovementRequestId } },
-        }),
-      },
-    });
-
-    log.info(`Checkout created: ${session.id} type=${type} user=${userId}`);
-    return { url: session.url, sessionId: session.id };
-  }
-
-  // ── WEBHOOK — idempotent
-  async handleWebhook(rawBody, signature) {
-    let event;
     try {
-      event = stripe.webhooks.constructEvent(
-        rawBody,
-        signature,
-        config.STRIPE_WEBHOOK_SECRET
-      );
-    } catch (err) {
-      log.error(`Webhook signature failed: ${err.message}`);
-      log.error(`Secret prefix: ${config.STRIPE_WEBHOOK_SECRET?.substring(0, 15)}...`);
-      throw new Error(`Webhook signature verification failed: ${err.message}`);
-    }
+      const stripeCustomerId = await this._getOrCreateStripeCustomer(userId);
 
-    log.info(`Webhook event received: ${event.type}`);
+      let lineItems = [];
+      let metadata = { userId, type };
+      let pendingImprovementRequestId = null;
+      let credits = 0;
 
-    if (event.type === 'checkout.session.completed') {
-      await this._handleCheckoutCompleted(event.data.object);
+      if (type === 'LISTING_UNLOCK') {
+        const listing = await prisma.listing.findUnique({
+          where: { id: listingId },
+          select: { id: true, status: true, userId: true },
+        });
+        if (!listing) throw new Error('Listing not found');
+        if (listing.userId !== userId) throw new Error('Access denied');
+        if (listing.status !== 'DRAFT') {
+          throw new Error(`Listing status is "${listing.status}". Only DRAFT listings can be unlocked.`);
+        }
+        metadata.listingId = listingId;
+        lineItems = [{
+          price_data: {
+            currency: 'chf',
+            product_data: {
+              name: 'Débloquez votre annonce immobilière',
+              description: "Génération IA d'une annonce professionnelle en français",
+            },
+            unit_amount: PRICES.LISTING_UNLOCK,
+          },
+          quantity: 1,
+        }];
+
+      } else if (type === 'IMPROVEMENT_REQUEST') {
+        const listing = await prisma.listing.findUnique({
+          where: { id: listingId },
+          select: { id: true, status: true, userId: true },
+        });
+        if (!listing) throw new Error('Listing not found');
+        if (listing.userId !== userId) throw new Error('Access denied');
+
+        const improvementRequest = await prisma.improvementRequest.create({
+          data: { userId, listingId, status: 'PENDING', userNote: userNote ?? null },
+        });
+        pendingImprovementRequestId = improvementRequest.id;
+        metadata.listingId = listingId;
+        metadata.improvementRequestId = improvementRequest.id;
+        lineItems = [{
+          price_data: {
+            currency: 'chf',
+            product_data: {
+              name: 'Avis professionnel immobilier',
+              description: 'Votre annonce est analysée et améliorée par un expert',
+            },
+            unit_amount: PRICES.IMPROVEMENT_REQUEST,
+          },
+          quantity: 1,
+        }];
+
+      } else if (type === 'PACKAGE') {
+        if (!packageId) throw new Error('packageId is required for PACKAGE type');
+        const pkg = await prisma.package.findUnique({
+          where: { id: packageId, isActive: true },
+          select: { id: true, name: true, description: true, price: true, credits: true, pricePerCredit: true },
+        });
+        if (!pkg) throw new Error('Package not found or inactive');
+
+        if (pkg.price <= 0) {
+          throw new Error('Package price must be greater than 0 for Stripe checkout.');
+        }
+
+        credits = pkg.credits;
+        metadata.packageId = packageId;
+        lineItems = [{
+          price_data: {
+            currency: 'chf',
+            product_data: {
+              name: pkg.name,
+              description: `${pkg.credits} crédits IA — ${pkg.description || 'Package'}`,
+            },
+            unit_amount: Math.round(pkg.price * 100),
+          },
+          quantity: 1,
+        }];
+      }
+
+      const clientUrl = config.CLIENT_URL || config.CLIENT_URLS?.split(',')[0]?.trim();
+
+      if (!clientUrl) {
+        throw new Error('CLIENT_URL is missing in environment variables');
+      }
+
+      // Dynamic success URL based on payment type
+      let successPath = '/creer-annonce/ready'; 
+      if (type === 'PACKAGE') {
+        successPath = '/tarifs'; 
+      }
+
+      const session = await stripe.checkout.sessions.create({
+        customer: stripeCustomerId,
+        payment_method_types: ['card'],
+        line_items: lineItems,
+        mode: 'payment',
+        success_url: `${clientUrl}${successPath}?session_id={CHECKOUT_SESSION_ID}&success=true&type=${type}`,
+        cancel_url: `${clientUrl}${successPath}?canceled=true`,
+        metadata,
+      });
+
+      await prisma.payment.create({
+        data: {
+          userId,
+          amount: lineItems[0].price_data.unit_amount / 100,
+          credits,
+          type,
+          status: 'PENDING',
+          stripeSessionId: session.id,
+          stripePaymentIntentId: '',
+          stripeCustomerId,
+          packageId: packageId ?? null,
+          ...(pendingImprovementRequestId && {
+            improvementRequest: { connect: { id: pendingImprovementRequestId } },
+          }),
+        },
+      });
+
+      log.info(`Checkout created: ${session.id} type=${type} user=${userId}`);
+      return { url: session.url, sessionId: session.id };
+
+    } catch (error) {
+      log.error(`Checkout Error: ${error.message}`, { stack: error.stack });
+      throw new Error(`Payment initiation failed: ${error.message}`);
     }
-    return { received: true };
   }
 
-  // ── WEBHOOK HANDLER 
-  async _handleCheckoutCompleted(session) {
-    const { userId, listingId, type, packageId, improvementRequestId } = session.metadata;
-    log.info(`Webhook _handleCheckoutCompleted: type=${type} user=${userId} session=${session.id}`);
-
-
-    const updateResult = await prisma.payment.updateMany({
-      where: {
-        stripeSessionId: session.id,
-        status: 'PENDING', // ← KEY guard
-      },
-      data: {
-        status: 'SUCCESS',
-        stripePaymentIntentId: session.payment_intent ?? '',
-      },
-    });
-
-    if (updateResult.count === 0) {
-      log.info(`Webhook: session ${session.id} already processed — skipping`);
-      return;
-    }
-
-    log.info(`Webhook: processing ${type} for user ${userId}`);
-
-    if (type === 'LISTING_UNLOCK') {
-      await this._handleListingUnlock(userId, listingId);
-    } else if (type === 'IMPROVEMENT_REQUEST') {
-      await this._handleImprovementRequestPaid(listingId, improvementRequestId);
-    } else if (type === 'PACKAGE') {
-      await this._handlePackagePurchase(userId, packageId, session.id);
-    }
-  }
-
-  // ── VERIFY AND UNLOCK — also idempotent ───────────────────────────────
-  // async verifyAndUnlockIfPaid(sessionId, userId) {
-  //   log.info(`verifyAndUnlockIfPaid: session=${sessionId} user=${userId}`);
-
-  //   const session = await stripe.checkout.sessions.retrieve(sessionId);
-  //   log.info(`Stripe session payment_status: ${session.payment_status}`);
-
-  //   if (session.payment_status !== 'paid') {
-  //     log.warn(`Session ${sessionId} not paid yet`);
-  //     return { paid: false };
-  //   }
-
-  //   const { type, packageId, listingId } = session.metadata;
-
-  //   // Atomic update — শুধু PENDING থাকলেই চলবে
-  //   const updateResult = await prisma.payment.updateMany({
-  //     where: {
-  //       stripeSessionId: sessionId,
-  //       userId: userId,
-  //       status: 'PENDING', // ← KEY guard
-  //     },
-  //     data: {
-  //       status: 'SUCCESS',
-  //       stripePaymentIntentId: session.payment_intent ?? '',
-  //     },
-  //   });
-
-  //   if (updateResult.count === 0) {
-  //     // ইতিমধ্যে webhook process করে ফেলেছে
-  //     log.info(`Session ${sessionId} already processed — returning current credits`);
-  //     const user = await prisma.user.findUnique({
-  //       where: { id: userId },
-  //       select: { credits: true },
-  //     });
-  //     return {
-  //       paid: true,
-  //       alreadyProcessed: true,
-  //       creditsRemaining: user?.credits ?? 0,
-  //     };
-  //   }
-
-  //   // প্রথমবার process হচ্ছে
-  //   log.info(`First time processing: type=${type} user=${userId}`);
-  //   let creditsRemaining = 0;
-
-  //   if (type === 'PACKAGE') {
-  //     const pkg = await prisma.package.findUnique({
-  //       where: { id: packageId },
-  //       select: { credits: true, name: true },
-  //     });
-
-  //     if (!pkg) {
-  //       log.error(`Package ${packageId} not found`);
-  //       throw new Error('Package not found');
-  //     }
-
-  //     log.info(`Adding ${pkg.credits} credits to user ${userId} for "${pkg.name}"`);
-
-  //     const [updatedUser] = await prisma.$transaction([
-  //       prisma.user.update({
-  //         where: { id: userId },
-  //         data: { credits: { increment: pkg.credits } },
-  //       }),
-  //       prisma.creditTransaction.create({
-  //         data: {
-  //           userId,
-  //           amount: pkg.credits,
-  //           type: 'PURCHASE',
-  //           reference: `package:${packageId}:session:${sessionId}`,
-  //         },
-  //       }),
-  //     ]);
-
-  //     creditsRemaining = updatedUser.credits;
-  //     log.info(`User ${userId} now has ${creditsRemaining} credits`);
-
-  //   } else if (type === 'LISTING_UNLOCK') {
-  //     await this._handleListingUnlock(userId, listingId);
-  //     const user = await prisma.user.findUnique({
-  //       where: { id: userId },
-  //       select: { credits: true },
-  //     });
-  //     creditsRemaining = user?.credits ?? 0;
-
-  //   } else if (type === 'IMPROVEMENT_REQUEST') {
-  //     const { improvementRequestId } = session.metadata;
-  //     await this._handleImprovementRequestPaid(listingId, improvementRequestId);
-  //     const user = await prisma.user.findUnique({
-  //       where: { id: userId },
-  //       select: { credits: true },
-  //     });
-  //     creditsRemaining = user?.credits ?? 0;
-  //   }
-
-  //   return { paid: true, alreadyProcessed: false, creditsRemaining };
-  // }
-
-
+  // ✅ MAIN VERIFICATION METHOD (No Webhook reliance)
   async verifyAndUnlockIfPaid(sessionId, userId) {
     log.info(`verifyAndUnlockIfPaid: session=${sessionId} user=${userId}`);
 
+    // 1. Directly verify from Stripe API
     const session = await stripe.checkout.sessions.retrieve(sessionId);
     log.info(`Stripe session payment_status: ${session.payment_status}`);
 
@@ -316,12 +183,12 @@ class PaymentService {
 
     const { type, packageId, listingId } = session.metadata;
 
-    // Atomic update — only process if PENDING
+    // 2. Idempotency Guard (Atomic update — only process if PENDING)
     const updateResult = await prisma.payment.updateMany({
       where: {
         stripeSessionId: sessionId,
         userId: userId,
-        status: 'PENDING',
+        status: 'PENDING', 
       },
       data: {
         status: 'SUCCESS',
@@ -344,7 +211,7 @@ class PaymentService {
       };
     }
 
-    // First time processing
+    // 3. First time processing
     log.info(`First time processing: type=${type} user=${userId}`);
     let creditsRemaining = 0;
     let updatedPackageId = null;
@@ -384,7 +251,6 @@ class PaymentService {
       creditsRemaining = updatedUser.credits;
       updatedPackageId = updatedUser.packageId;
 
-      // Fetch the updated package details
       updatedPackage = await prisma.package.findUnique({
         where: { id: updatedPackageId },
         select: { id: true, name: true, slug: true, credits: true, price: true, description: true, features: true },
@@ -446,38 +312,6 @@ class PaymentService {
     log.info(`Improvement request ${improvementRequestId} activated`);
   }
 
-
-  // async _handlePackagePurchase(userId, packageId, sessionId = null) {
-  //   const pkg = await prisma.package.findUnique({
-  //     where: { id: packageId },
-  //     select: { credits: true, name: true },
-  //   });
-
-  //   if (!pkg) {
-  //     log.error(`Package ${packageId} not found`);
-  //     return;
-  //   }
-
-  //   const reference = sessionId
-  //     ? `package:${packageId}:session:${sessionId}`
-  //     : `package:${packageId}`;
-
-  //   const [updatedUser] = await prisma.$transaction([
-  //     prisma.user.update({
-  //       where: { id: userId },
-  //       data: { credits: { increment: pkg.credits } },
-  //     }),
-  //     prisma.creditTransaction.create({
-  //       data: { userId, amount: pkg.credits, type: 'PURCHASE', reference },
-  //     }),
-  //   ]);
-
-  //   log.info(`Package "${pkg.name}": +${pkg.credits} credits → user ${userId} now has ${updatedUser.credits}`);
-  // }
-  // In payment.service.js - Update the _handlePackagePurchase method
-
-  // In payment.service.js - Update _handlePackagePurchase method
-
   async _handlePackagePurchase(userId, packageId, sessionId = null) {
     const pkg = await prisma.package.findUnique({
       where: { id: packageId },
@@ -492,12 +326,6 @@ class PaymentService {
     const reference = sessionId
       ? `package:${packageId}:session:${sessionId}`
       : `package:${packageId}`;
-
-    // Get current user to check existing package
-    const currentUser = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { packageId: true }
-    });
 
     const [updatedUser] = await prisma.$transaction([
       prisma.user.update({
