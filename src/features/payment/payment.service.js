@@ -18,7 +18,27 @@ class PaymentService {
       select: { id: true, email: true, name: true, stripeCustomerId: true },
     });
     if (!user) throw new Error('User not found');
-    if (user.stripeCustomerId) return user.stripeCustomerId;
+
+    if (user.stripeCustomerId) {
+      try {
+
+        await stripe.customers.retrieve(user.stripeCustomerId);
+        return user.stripeCustomerId;
+      } catch (error) {
+  
+        if (error.message.includes('No such customer')) {
+          log.warn(`Stripe customer ${user.stripeCustomerId} not found in Stripe. Creating a new one.`);
+
+          await prisma.user.update({
+            where: { id: userId },
+            data: { stripeCustomerId: null }
+          });
+        } else {
+
+          throw error;
+        }
+      }
+    }
 
     const customer = await stripe.customers.create({
       email: user.email,
